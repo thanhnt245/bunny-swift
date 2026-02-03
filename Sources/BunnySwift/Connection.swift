@@ -85,6 +85,20 @@ public actor Connection {
         }
     }
 
+    public func withChannel<T: Sendable>(
+        _ operation: (Channel) async throws -> T
+    ) async throws -> T {
+        let channel = try await openChannel()
+        do {
+            let result = try await operation(channel)
+            try await channel.close()
+            return result
+        } catch {
+            try? await channel.close()
+            throw error
+        }
+    }
+
     private func allocateChannelID() throws -> UInt16 {
         guard let params = negotiatedParams else {
             throw ConnectionError.notConnected

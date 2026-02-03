@@ -145,6 +145,68 @@ struct ChannelIntegrationTests {
     try await channel2.close()
     try await channel3.close()
   }
+
+  @Test("withChannel closes channel after operation", .timeLimit(.minutes(1)))
+  func withChannelClosesAfterOperation() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    var capturedChannel: Channel?
+    try await connection.withChannel { channel in
+      capturedChannel = channel
+      #expect(await channel.open)
+    }
+
+    #expect(await !capturedChannel!.open)
+  }
+
+  @Test("withChannel returns value from operation", .timeLimit(.minutes(1)))
+  func withChannelReturnsValue() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let result = try await connection.withChannel { channel in
+      await channel.number
+    }
+
+    #expect(result > 0)
+  }
+
+  @Test("withChannel closes channel on error", .timeLimit(.minutes(1)))
+  func withChannelClosesOnError() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    struct TestError: Error {}
+
+    var capturedChannel: Channel?
+    do {
+      try await connection.withChannel { channel in
+        capturedChannel = channel
+        throw TestError()
+      }
+      Issue.record("Expected error to be thrown")
+    } catch is TestError {}
+
+    #expect(await !capturedChannel!.open)
+  }
+
+  @Test("withChannel allows queue operations", .timeLimit(.minutes(1)))
+  func withChannelAllowsQueueOperations() async throws {
+    let connection = try await TestConfig.openConnection()
+    defer { Task { try await connection.close() } }
+
+    let messageBody = "withChannel test"
+    let received = try await connection.withChannel { channel in
+      let queue = try await channel.queue("", exclusive: true)
+      try await queue.publish(messageBody)
+      let response = try await queue.get(acknowledgementMode: .automatic)
+      _ = try await queue.delete()
+      return response?.bodyString
+    }
+
+    #expect(received == messageBody)
+  }
 }
 
 // MARK: - Queue Tests
