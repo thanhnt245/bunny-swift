@@ -10,336 +10,342 @@
 
 import Atomics
 
-public final class ConnectionPool<
-    Connection: PooledConnection,
-    ConnectionIDGenerator: ConnectionIDGeneratorProtocol,
-    KeepAliveBehavior: ConnectionKeepAliveBehavior,
-    ObservabilityDelegate: ConnectionPoolObservabilityDelegate
->: Sendable where
-    Connection.ID == ConnectionIDGenerator.ID,
-    KeepAliveBehavior.Connection == Connection,
-    ObservabilityDelegate.ConnectionID == Connection.ID
+public final class GenericConnectionPool<
+  Connection: PoolableConnection,
+  ConnectionIDGenerator: ConnectionIDGeneratorProtocol,
+  KeepAliveBehavior: ConnectionKeepAliveBehavior,
+  ObservabilityDelegate: ConnectionPoolObservabilityDelegate
+>: Sendable
+where
+  Connection.ID == ConnectionIDGenerator.ID,
+  KeepAliveBehavior.Connection == Connection,
+  ObservabilityDelegate.ConnectionID == Connection.ID
 {
-    public typealias ConnectionFactory = @Sendable (Connection.ID) async throws -> Connection
+  public typealias ConnectionFactory = @Sendable (Connection.ID) async throws -> Connection
 
-    // MARK: - Request Type
+  // MARK: - Request Type
 
-    struct Request: ConnectionRequestProtocol, Sendable {
-        typealias ID = Int
+  struct Request: ConnectionRequestProtocol, Sendable {
+    typealias ID = Int
 
-        let id: ID
-        let continuation: CheckedContinuation<ConnectionLease<Connection>, any Error>
+    let id: ID
+    let continuation: CheckedContinuation<ConnectionLease<Connection>, any Error>
 
-        func complete(with result: Result<ConnectionLease<Connection>, ConnectionPoolError>) {
-            continuation.resume(with: result.mapError { $0 as any Error })
+    func complete(with result: Result<ConnectionLease<Connection>, ConnectionPoolError>) {
+      continuation.resume(with: result.mapError { $0 as any Error })
+    }
+  }
+
+  // MARK: - Timer Cancellation
+
+  struct TimerCancellationToken: Hashable, Sendable {
+    let id: Int
+  }
+
+  // MARK: - State Machine Alias
+
+  typealias StateMachine = PoolStateMachine<
+    Connection, ConnectionIDGenerator, Request, TimerCancellationToken
+  >
+
+  // MARK: - Pool Actions
+
+  private enum PoolAction: Sendable {
+    case runStateMachineActions(StateMachine.Action)
+    case shutdown
+  }
+
+  // MARK: - Properties
+
+  private let factory: ConnectionFactory
+  private let keepAliveBehavior: KeepAliveBehavior
+  private let observabilityDelegate: ObservabilityDelegate
+
+  private struct State: Sendable {
+    var stateMachine: StateMachine
+    var timerContinuations: [Int: CheckedContinuation<Void, Never>] = [:]
+  }
+
+  private let stateBox: LockedValueBox<State>
+  private let actionStream: AsyncStream<PoolAction>
+  private let actionContinuation: AsyncStream<PoolAction>.Continuation
+  private let requestIDGenerator = ManagedAtomic<Int>(0)
+  private let timerIDGenerator = ManagedAtomic<Int>(0)
+
+  // MARK: - Initialization
+
+  public init(
+    configuration: ConnectionPoolConfiguration,
+    idGenerator: ConnectionIDGenerator,
+    keepAliveBehavior: KeepAliveBehavior,
+    observabilityDelegate: ObservabilityDelegate,
+    factory: @escaping ConnectionFactory
+  ) {
+    self.factory = factory
+    self.keepAliveBehavior = keepAliveBehavior
+    self.observabilityDelegate = observabilityDelegate
+
+    let smConfig = StateMachine.Configuration(
+      minimumConnectionCount: configuration.minimumConnectionCount,
+      maximumConnectionSoftLimit: configuration.maximumConnectionSoftLimit,
+      maximumConnectionHardLimit: configuration.maximumConnectionHardLimit,
+      keepAliveFrequency: configuration.keepAliveFrequency,
+      idleTimeout: configuration.idleTimeout,
+      circuitBreakerTripAfter: configuration.circuitBreakerTripAfter
+    )
+
+    let stateMachine = StateMachine(configuration: smConfig, idGenerator: idGenerator)
+    self.stateBox = LockedValueBox(State(stateMachine: stateMachine))
+
+    (self.actionStream, self.actionContinuation) = AsyncStream.makeStream()
+  }
+
+  // MARK: - Public API
+
+  public func run() async {
+    await withTaskGroup(of: Void.self) { group in
+      for await action in actionStream {
+        switch action {
+        case .runStateMachineActions(let smAction):
+          self.executeAction(smAction, in: &group)
+        case .shutdown:
+          group.cancelAll()
+          return
         }
+      }
     }
+  }
 
-    // MARK: - Timer Cancellation
+  public func leaseConnection() async throws -> ConnectionLease<Connection> {
+    let requestID = requestIDGenerator.loadThenWrappingIncrement(ordering: .relaxed)
 
-    struct TimerCancellationToken: Hashable, Sendable {
-        let id: Int
-    }
-
-    // MARK: - State Machine Alias
-
-    typealias StateMachine = PoolStateMachine<Connection, ConnectionIDGenerator, Request, TimerCancellationToken>
-
-    // MARK: - Pool Actions
-
-    private enum PoolAction: Sendable {
-        case runStateMachineActions(StateMachine.Action)
-        case shutdown
-    }
-
-    // MARK: - Properties
-
-    private let factory: ConnectionFactory
-    private let keepAliveBehavior: KeepAliveBehavior
-    private let observabilityDelegate: ObservabilityDelegate
-
-    private struct State: Sendable {
-        var stateMachine: StateMachine
-        var timerContinuations: [Int: CheckedContinuation<Void, Never>] = [:]
-    }
-
-    private let stateBox: LockedValueBox<State>
-    private let actionStream: AsyncStream<PoolAction>
-    private let actionContinuation: AsyncStream<PoolAction>.Continuation
-    private let requestIDGenerator = ManagedAtomic<Int>(0)
-    private let timerIDGenerator = ManagedAtomic<Int>(0)
-
-    // MARK: - Initialization
-
-    public init(
-        configuration: ConnectionPoolConfiguration,
-        idGenerator: ConnectionIDGenerator,
-        keepAliveBehavior: KeepAliveBehavior,
-        observabilityDelegate: ObservabilityDelegate,
-        factory: @escaping ConnectionFactory
-    ) {
-        self.factory = factory
-        self.keepAliveBehavior = keepAliveBehavior
-        self.observabilityDelegate = observabilityDelegate
-
-        let smConfig = StateMachine.Configuration(
-            minimumConnectionCount: configuration.minimumConnectionCount,
-            maximumConnectionSoftLimit: configuration.maximumConnectionSoftLimit,
-            maximumConnectionHardLimit: configuration.maximumConnectionHardLimit,
-            keepAliveFrequency: configuration.keepAliveFrequency,
-            idleTimeout: configuration.idleTimeout,
-            circuitBreakerTripAfter: configuration.circuitBreakerTripAfter
-        )
-
-        let stateMachine = StateMachine(configuration: smConfig, idGenerator: idGenerator)
-        self.stateBox = LockedValueBox(State(stateMachine: stateMachine))
-
-        (self.actionStream, self.actionContinuation) = AsyncStream.makeStream()
-    }
-
-    // MARK: - Public API
-
-    public func run() async {
-        await withTaskGroup(of: Void.self) { group in
-            for await action in actionStream {
-                switch action {
-                case .runStateMachineActions(let smAction):
-                    self.executeAction(smAction, in: &group)
-                case .shutdown:
-                    group.cancelAll()
-                    return
-                }
-            }
-        }
-    }
-
-    public func leaseConnection() async throws -> ConnectionLease<Connection> {
-        let requestID = requestIDGenerator.loadThenWrappingIncrement(ordering: .relaxed)
-
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let request = Request(id: requestID, continuation: continuation)
-                let action = stateBox.withLockedValue { state in
-                    state.stateMachine.leaseConnection(request)
-                }
-                enqueueAction(action)
-            }
-        } onCancel: {
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.cancelRequest(requestID)
-            }
-            enqueueAction(action)
-        }
-    }
-
-    /// Not recommended outside of tests due to [connection churn](https://www.rabbitmq.com/docs/connections#high-connection-churn)
-    public func withConnection<Result: Sendable>(
-        _ closure: (Connection) async throws -> Result
-    ) async throws -> Result {
-        let lease = try await leaseConnection()
-        defer { lease.release() }
-        return try await closure(lease.connection)
-    }
-
-    public func releaseConnection(_ connection: Connection) {
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        let request = Request(id: requestID, continuation: continuation)
         let action = stateBox.withLockedValue { state in
-            state.stateMachine.releaseConnection(connection)
+          state.stateMachine.leaseConnection(request)
         }
         enqueueAction(action)
+      }
+    } onCancel: {
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.cancelRequest(requestID)
+      }
+      enqueueAction(action)
     }
+  }
 
-    public func shutdown() {
-        let action = stateBox.withLockedValue { state in
-            state.stateMachine.triggerShutdown()
+  /// Executes a closure with a leased connection, releasing it when done.
+  ///
+  /// - SeeAlso: [Connection churn](https://www.rabbitmq.com/docs/connections#high-connection-churn)
+  public func withConnection<Result: Sendable>(
+    _ closure: (Connection) async throws -> Result
+  ) async throws -> Result {
+    let lease = try await leaseConnection()
+    defer { lease.release() }
+    return try await closure(lease.connection)
+  }
+
+  public func releaseConnection(_ connection: Connection) {
+    let action = stateBox.withLockedValue { state in
+      state.stateMachine.releaseConnection(connection)
+    }
+    enqueueAction(action)
+  }
+
+  public func shutdown() {
+    let action = stateBox.withLockedValue { state in
+      state.stateMachine.triggerShutdown()
+    }
+    enqueueAction(action)
+    actionContinuation.yield(.shutdown)
+  }
+
+  // MARK: - Action Execution
+
+  private func enqueueAction(_ action: StateMachine.Action) {
+    actionContinuation.yield(.runStateMachineActions(action))
+  }
+
+  private func executeAction(_ action: StateMachine.Action, in group: inout TaskGroup<Void>) {
+    executeRequestAction(action.request)
+    executeConnectionAction(action.connection, in: &group)
+  }
+
+  private func executeRequestAction(_ action: StateMachine.RequestAction) {
+    switch action {
+    case .leaseConnection(let request, let connection):
+      let lease = ConnectionLease(connection: connection) { [weak self] conn in
+        self?.releaseConnection(conn)
+      }
+      request.complete(with: .success(lease))
+      observabilityDelegate.requestDequeued()
+
+    case .queueRequest:
+      observabilityDelegate.requestQueued()
+
+    case .failRequest(let request, let error):
+      request.complete(with: .failure(error))
+      observabilityDelegate.requestFailed()
+
+    case .failRequests(let requests, let error):
+      for request in requests {
+        request.complete(with: .failure(error))
+        observabilityDelegate.requestFailed()
+      }
+
+    case .none:
+      break
+    }
+  }
+
+  private func executeConnectionAction(
+    _ action: StateMachine.ConnectionAction, in group: inout TaskGroup<Void>
+  ) {
+    switch action {
+    case .createConnection(let connectionID):
+      group.addTask {
+        await self.createConnection(connectionID)
+      }
+
+    case .scheduleTimers(let timers):
+      for timer in timers {
+        scheduleTimer(timer, in: &group)
+      }
+
+    case .runKeepAlive(let connection):
+      group.addTask {
+        await self.runKeepAlive(for: connection)
+      }
+
+    case .closeConnection(let connection, let timersToCancel):
+      for token in timersToCancel {
+        cancelTimer(token)
+      }
+      connection.close()
+      observabilityDelegate.connectionClosed(id: connection.id)
+
+    case .cancelTimers(let tokens):
+      cancelTimers(tokens)
+
+    case .shutdown(let context):
+      cancelTimers(context.timersToCancel)
+      for connection in context.connections {
+        connection.close()
+        observabilityDelegate.connectionClosed(id: connection.id)
+      }
+
+    case .none:
+      break
+    }
+  }
+
+  // MARK: - Connection Creation
+
+  private func createConnection(_ connectionID: Connection.ID) async {
+    do {
+      let connection = try await factory(connectionID)
+      observabilityDelegate.connectionCreated(id: connection.id)
+
+      connection.onClose { [weak self] _ in
+        guard let self = self else { return }
+        let action = self.stateBox.withLockedValue { state in
+          state.stateMachine.connectionClosed(connectionID)
         }
-        enqueueAction(action)
-        actionContinuation.yield(.shutdown)
+        self.enqueueAction(action)
+      }
+
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.connectionEstablished(connection)
+      }
+      enqueueAction(action)
+    } catch {
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.connectionCreationFailed(connectionID, error: error)
+      }
+      enqueueAction(action)
+    }
+  }
+
+  // MARK: - Keep-Alive
+
+  private func runKeepAlive(for connection: Connection) async {
+    do {
+      try await keepAliveBehavior.runKeepAlive(for: connection)
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.keepAliveSucceeded(connection)
+      }
+      enqueueAction(action)
+    } catch {
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.keepAliveFailed(connection.id)
+      }
+      enqueueAction(action)
+    }
+  }
+
+  // MARK: - Timer Management
+
+  private func scheduleTimer(_ timer: StateMachine.Timer, in group: inout TaskGroup<Void>) {
+    let tokenID = timerIDGenerator.loadThenWrappingIncrement(ordering: .relaxed)
+    let token = TimerCancellationToken(id: tokenID)
+
+    stateBox.withLockedValue { state in
+      state.stateMachine.timerScheduled(timer, cancellationToken: token)
     }
 
-    // MARK: - Action Execution
-
-    private func enqueueAction(_ action: StateMachine.Action) {
-        actionContinuation.yield(.runStateMachineActions(action))
+    group.addTask {
+      await self.runTimer(timer, token: token)
     }
+  }
 
-    private func executeAction(_ action: StateMachine.Action, in group: inout TaskGroup<Void>) {
-        executeRequestAction(action.request)
-        executeConnectionAction(action.connection, in: &group)
-    }
-
-    private func executeRequestAction(_ action: StateMachine.RequestAction) {
-        switch action {
-        case .leaseConnection(let request, let connection):
-            let lease = ConnectionLease(connection: connection) { [weak self] conn in
-                self?.releaseConnection(conn)
-            }
-            request.complete(with: .success(lease))
-            observabilityDelegate.requestDequeued()
-
-        case .queueRequest:
-            observabilityDelegate.requestQueued()
-
-        case .failRequest(let request, let error):
-            request.complete(with: .failure(error))
-            observabilityDelegate.requestFailed()
-
-        case .failRequests(let requests, let error):
-            for request in requests {
-                request.complete(with: .failure(error))
-                observabilityDelegate.requestFailed()
-            }
-
-        case .none:
-            break
-        }
-    }
-
-    private func executeConnectionAction(_ action: StateMachine.ConnectionAction, in group: inout TaskGroup<Void>) {
-        switch action {
-        case .createConnection(let connectionID):
-            group.addTask {
-                await self.createConnection(connectionID)
-            }
-
-        case .scheduleTimers(let timers):
-            for timer in timers {
-                scheduleTimer(timer, in: &group)
-            }
-
-        case .runKeepAlive(let connection):
-            group.addTask {
-                await self.runKeepAlive(for: connection)
-            }
-
-        case .closeConnection(let connection, let timersToCancel):
-            for token in timersToCancel {
-                cancelTimer(token)
-            }
-            connection.close()
-            observabilityDelegate.connectionClosed(id: connection.id)
-
-        case .cancelTimers(let tokens):
-            cancelTimers(tokens)
-
-        case .shutdown(let context):
-            cancelTimers(context.timersToCancel)
-            for connection in context.connections {
-                connection.close()
-                observabilityDelegate.connectionClosed(id: connection.id)
-            }
-
-        case .none:
-            break
-        }
-    }
-
-    // MARK: - Connection Creation
-
-    private func createConnection(_ connectionID: Connection.ID) async {
+  private func runTimer(_ timer: StateMachine.Timer, token: TimerCancellationToken) async {
+    let shouldTrigger = await withTaskGroup(of: Bool.self) { group in
+      group.addTask {
         do {
-            let connection = try await factory(connectionID)
-            observabilityDelegate.connectionCreated(id: connection.id)
-
-            connection.onClose { [weak self] _ in
-                guard let self = self else { return }
-                let action = self.stateBox.withLockedValue { state in
-                    state.stateMachine.connectionClosed(connectionID)
-                }
-                self.enqueueAction(action)
-            }
-
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.connectionEstablished(connection)
-            }
-            enqueueAction(action)
+          try await Task.sleep(for: timer.duration)
+          return true
         } catch {
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.connectionCreationFailed(connectionID, error: error)
-            }
-            enqueueAction(action)
+          return false
         }
+      }
+
+      group.addTask {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          self.stateBox.withLockedValue { state in
+            state.timerContinuations[token.id] = continuation
+          }
+        }
+        return false
+      }
+
+      let result = await group.next()!
+      group.cancelAll()
+      return result
     }
 
-    // MARK: - Keep-Alive
-
-    private func runKeepAlive(for connection: Connection) async {
-        do {
-            try await keepAliveBehavior.runKeepAlive(for: connection)
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.keepAliveSucceeded(connection)
-            }
-            enqueueAction(action)
-        } catch {
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.keepAliveFailed(connection.id)
-            }
-            enqueueAction(action)
-        }
+    stateBox.withLockedValue { state in
+      state.timerContinuations.removeValue(forKey: token.id)
     }
 
-    // MARK: - Timer Management
-
-    private func scheduleTimer(_ timer: StateMachine.Timer, in group: inout TaskGroup<Void>) {
-        let tokenID = timerIDGenerator.loadThenWrappingIncrement(ordering: .relaxed)
-        let token = TimerCancellationToken(id: tokenID)
-
-        stateBox.withLockedValue { state in
-            state.stateMachine.timerScheduled(timer, cancellationToken: token)
-        }
-
-        group.addTask {
-            await self.runTimer(timer, token: token)
-        }
+    if shouldTrigger {
+      let action = stateBox.withLockedValue { state in
+        state.stateMachine.timerTriggered(timer)
+      }
+      enqueueAction(action)
     }
+  }
 
-    private func runTimer(_ timer: StateMachine.Timer, token: TimerCancellationToken) async {
-        let shouldTrigger = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                do {
-                    try await Task.sleep(for: timer.duration)
-                    return true
-                } catch {
-                    return false
-                }
-            }
-
-            group.addTask {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    self.stateBox.withLockedValue { state in
-                        state.timerContinuations[token.id] = continuation
-                    }
-                }
-                return false
-            }
-
-            let result = await group.next()!
-            group.cancelAll()
-            return result
-        }
-
-        stateBox.withLockedValue { state in
-            state.timerContinuations.removeValue(forKey: token.id)
-        }
-
-        if shouldTrigger {
-            let action = stateBox.withLockedValue { state in
-                state.stateMachine.timerTriggered(timer)
-            }
-            enqueueAction(action)
-        }
+  private func cancelTimer(_ token: TimerCancellationToken) {
+    let continuation = stateBox.withLockedValue { state in
+      state.timerContinuations.removeValue(forKey: token.id)
     }
+    continuation?.resume()
+  }
 
-    private func cancelTimer(_ token: TimerCancellationToken) {
-        let continuation = stateBox.withLockedValue { state in
-            state.timerContinuations.removeValue(forKey: token.id)
-        }
-        continuation?.resume()
+  private func cancelTimers(_ tokens: some Sequence<TimerCancellationToken>) {
+    for token in tokens {
+      cancelTimer(token)
     }
-
-    private func cancelTimers(_ tokens: some Sequence<TimerCancellationToken>) {
-        for token in tokens {
-            cancelTimer(token)
-        }
-    }
+  }
 }
-

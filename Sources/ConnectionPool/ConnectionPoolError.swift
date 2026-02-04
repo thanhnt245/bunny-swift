@@ -9,19 +9,19 @@
 // Copyright (c) 2017-2024 Vapor
 
 public struct ConnectionPoolError: Error, Hashable, Sendable {
-    private enum Base: Hashable, Sendable {
-        case requestCancelled
-        case poolShutdown
-        case circuitBreakerTripped
-    }
+  private enum Base: Hashable, Sendable {
+    case requestCancelled
+    case poolShutdown
+    case circuitBreakerTripped
+  }
 
-    private let base: Base
+  private let base: Base
 
-    private init(_ base: Base) {
-        self.base = base
-    }
+  private init(_ base: Base) {
+    self.base = base
+  }
 
-    public static let requestCancelled = ConnectionPoolError(.requestCancelled)
-    public static let poolShutdown = ConnectionPoolError(.poolShutdown)
-    public static let circuitBreakerTripped = ConnectionPoolError(.circuitBreakerTripped)
+  public static let requestCancelled = ConnectionPoolError(.requestCancelled)
+  public static let poolShutdown = ConnectionPoolError(.poolShutdown)
+  public static let circuitBreakerTripped = ConnectionPoolError(.circuitBreakerTripped)
 }

@@ -8,20 +8,20 @@
 // Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
-public struct ConnectionLease<Connection: PooledConnection>: Sendable {
-    public let connection: Connection
+public struct ConnectionLease<Connection: PoolableConnection>: Sendable {
+  public let connection: Connection
 
-    @usableFromInline
-    let releaseHandler: @Sendable (Connection) -> Void
+  @usableFromInline
+  let releaseHandler: @Sendable (Connection) -> Void
 
-    @inlinable
-    public init(connection: Connection, release: @escaping @Sendable (Connection) -> Void) {
-        self.connection = connection
-        self.releaseHandler = release
-    }
+  @inlinable
+  public init(connection: Connection, release: @escaping @Sendable (Connection) -> Void) {
+    self.connection = connection
+    self.releaseHandler = release
+  }
 
-    @inlinable
-    public func release() {
-        releaseHandler(connection)
-    }
+  @inlinable
+  public func release() {
+    releaseHandler(connection)
+  }
 }

@@ -11,18 +11,18 @@
 import Atomics
 
 public protocol ConnectionIDGeneratorProtocol: Sendable {
-    associatedtype ID: Hashable & Sendable
-    func next() -> ID
+  associatedtype ID: Hashable & Sendable
+  func next() -> ID
 }
 
 public struct ConnectionIDGenerator: ConnectionIDGeneratorProtocol, Sendable {
-    private let counter: ManagedAtomic<Int>
+  private let counter: ManagedAtomic<Int>
 
-    public init() {
-        self.counter = ManagedAtomic(0)
-    }
+  public init() {
+    self.counter = ManagedAtomic(0)
+  }
 
-    public func next() -> Int {
-        counter.loadThenWrappingIncrement(ordering: .relaxed)
-    }
+  public func next() -> Int {
+    counter.loadThenWrappingIncrement(ordering: .relaxed)
+  }
 }

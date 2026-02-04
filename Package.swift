@@ -29,6 +29,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
         .package(url: "https://github.com/apple/swift-atomics.git", from: "1.2.0"),
+        .package(url: "https://github.com/x-sheep/swift-property-based.git", from: "1.0.0"),
     ],
     targets: [
         // MARK: - Main Library
@@ -38,6 +39,7 @@ let package = Package(
                 "AMQPProtocol",
                 "Transport",
                 "Recovery",
+                "ConnectionPool",
             ]
         ),
 
@@ -91,7 +93,10 @@ let package = Package(
         ),
         .testTarget(
             name: "ConnectionPoolTests",
-            dependencies: ["ConnectionPool"]
+            dependencies: [
+                "ConnectionPool",
+                .product(name: "PropertyBased", package: "swift-property-based"),
+            ]
         ),
 
         // MARK: - Integration Tests

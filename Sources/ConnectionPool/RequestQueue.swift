@@ -15,53 +15,64 @@ import DequeModule
 /// Uses a deque for ordering and a dictionary for fast lookup. Cancelled requests
 /// are removed from the dictionary but left in the deque as "tombstones", which
 /// are skipped during dequeue operations.
+@usableFromInline
 struct RequestQueue<Request: ConnectionRequestProtocol>: Sendable {
-    private var queue: Deque<Request.ID>
-    private var requests: [Request.ID: Request]
+  @usableFromInline
+  var queue: Deque<Request.ID>
 
-    init() {
-        self.queue = Deque(minimumCapacity: 32)
-        self.requests = Dictionary(minimumCapacity: 32)
-    }
+  @usableFromInline
+  var requests: [Request.ID: Request]
 
-    /// Number of pending (non-cancelled) requests
-    var count: Int {
-        requests.count
-    }
+  @inlinable
+  init() {
+    self.queue = Deque(minimumCapacity: 32)
+    self.requests = Dictionary(minimumCapacity: 32)
+  }
 
-    /// Whether there are any pending requests
-    var isEmpty: Bool {
-        requests.isEmpty
-    }
+  /// Number of pending (non-cancelled) requests
+  @inlinable
+  var count: Int {
+    requests.count
+  }
 
-    /// Add a request to the end of the queue. O(1).
-    mutating func enqueue(_ request: Request) {
-        queue.append(request.id)
-        requests[request.id] = request
-    }
+  /// Whether there are any pending requests
+  @inlinable
+  var isEmpty: Bool {
+    requests.isEmpty
+  }
 
-    /// Remove and return the next pending request, skipping cancelled ones. O(1) amortized.
-    mutating func popFirst() -> Request? {
-        while let requestID = queue.popFirst() {
-            if let request = requests.removeValue(forKey: requestID) {
-                return request
-            }
-            // Request was cancelled (tombstone), skip it
-        }
-        return nil
-    }
+  /// Add a request to the end of the queue. O(1).
+  @inlinable
+  mutating func enqueue(_ request: Request) {
+    queue.append(request.id)
+    requests[request.id] = request
+  }
 
-    /// Cancel a request by ID. Returns the request if found. O(1).
-    mutating func cancel(_ requestID: Request.ID) -> Request? {
-        // Remove from dictionary only; ID remains in deque as tombstone
-        return requests.removeValue(forKey: requestID)
+  /// Remove and return the next pending request, skipping cancelled ones. O(1) amortized.
+  @inlinable
+  mutating func popFirst() -> Request? {
+    while let requestID = queue.popFirst() {
+      if let request = requests.removeValue(forKey: requestID) {
+        return request
+      }
+      // Request was cancelled (tombstone), skip it
     }
+    return nil
+  }
 
-    /// Remove all requests and return them.
-    mutating func removeAll() -> [Request] {
-        let result = Array(requests.values)
-        queue.removeAll()
-        requests.removeAll()
-        return result
-    }
+  /// Cancel a request by ID. Returns the request if found. O(1).
+  @inlinable
+  mutating func cancel(_ requestID: Request.ID) -> Request? {
+    // Remove from dictionary only; ID remains in deque as tombstone
+    return requests.removeValue(forKey: requestID)
+  }
+
+  /// Remove all requests and return them.
+  @inlinable
+  mutating func removeAll() -> [Request] {
+    let result = Array(requests.values)
+    queue.removeAll()
+    requests.removeAll()
+    return result
+  }
 }

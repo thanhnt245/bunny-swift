@@ -8,55 +8,55 @@
 // Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
-public protocol PooledConnection: AnyObject, Sendable {
-    associatedtype ID: Hashable & Sendable
+public protocol PoolableConnection: AnyObject, Sendable {
+  associatedtype ID: Hashable & Sendable
 
-    var id: ID { get }
-    func onClose(_ closure: @escaping @Sendable ((any Error)?) -> Void)
-    func close()
+  var id: ID { get }
+  func onClose(_ closure: @escaping @Sendable ((any Error)?) -> Void)
+  func close()
 }
 
 public protocol ConnectionRequestProtocol: Sendable {
-    associatedtype ID: Hashable & Sendable
-    associatedtype Connection: PooledConnection
+  associatedtype ID: Hashable & Sendable
+  associatedtype Connection: PoolableConnection
 
-    var id: ID { get }
-    func complete(with result: Result<ConnectionLease<Connection>, ConnectionPoolError>)
+  var id: ID { get }
+  func complete(with result: Result<ConnectionLease<Connection>, ConnectionPoolError>)
 }
 
 public protocol ConnectionKeepAliveBehavior: Sendable {
-    associatedtype Connection: PooledConnection
+  associatedtype Connection: PoolableConnection
 
-    var keepAliveFrequency: Duration? { get }
-    func runKeepAlive(for connection: Connection) async throws
+  var keepAliveFrequency: Duration? { get }
+  func runKeepAlive(for connection: Connection) async throws
 }
 
-public struct NoKeepAliveBehavior<Connection: PooledConnection>: ConnectionKeepAliveBehavior {
-    public var keepAliveFrequency: Duration? { nil }
+public struct NoKeepAliveBehavior<Connection: PoolableConnection>: ConnectionKeepAliveBehavior {
+  public var keepAliveFrequency: Duration? { nil }
 
-    public init() {}
+  public init() {}
 
-    public func runKeepAlive(for connection: Connection) async throws {}
+  public func runKeepAlive(for connection: Connection) async throws {}
 }
 
 public protocol ConnectionPoolObservabilityDelegate: Sendable {
-    associatedtype ConnectionID: Hashable & Sendable
+  associatedtype ConnectionID: Hashable & Sendable
 
-    func connectionCreated(id: ConnectionID)
-    func connectionClosed(id: ConnectionID)
-    func requestQueued()
-    func requestDequeued()
-    func requestFailed()
+  func connectionCreated(id: ConnectionID)
+  func connectionClosed(id: ConnectionID)
+  func requestQueued()
+  func requestDequeued()
+  func requestFailed()
 }
 
 public struct NoOpConnectionPoolObservabilityDelegate<ConnectionID: Hashable & Sendable>:
-    ConnectionPoolObservabilityDelegate
+  ConnectionPoolObservabilityDelegate
 {
-    public init() {}
+  public init() {}
 
-    public func connectionCreated(id: ConnectionID) {}
-    public func connectionClosed(id: ConnectionID) {}
-    public func requestQueued() {}
-    public func requestDequeued() {}
-    public func requestFailed() {}
+  public func connectionCreated(id: ConnectionID) {}
+  public func connectionClosed(id: ConnectionID) {}
+  public func requestQueued() {}
+  public func requestDequeued() {}
+  public func requestFailed() {}
 }

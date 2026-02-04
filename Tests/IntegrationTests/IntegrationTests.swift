@@ -601,3 +601,86 @@ struct PublisherConfirmsIntegrationTests {
     _ = try await queue.delete()
   }
 }
+
+// MARK: - Connection Pool Tests
+
+@Suite("Connection Pool Integration Tests", .disabled(if: TestConfig.skipIntegrationTests))
+struct ConnectionPoolIntegrationTests {
+
+  @Test("Pool withConnection leases and releases", .timeLimit(.minutes(1)))
+  func poolWithConnection() async throws {
+    let pool = BunnyConnectionPool(configuration: TestConfig.connectionConfiguration(), size: 2)
+    defer { pool.shutdown() }
+
+    let isConnected = try await pool.withConnection { connection in
+      await connection.connected
+    }
+    #expect(isConnected)
+  }
+
+  @Test("Pool withConnection with channel operations", .timeLimit(.minutes(1)))
+  func poolWithChannel() async throws {
+    let pool = BunnyConnectionPool(configuration: TestConfig.connectionConfiguration(), size: 2)
+    defer { pool.shutdown() }
+
+    let result = try await pool.withConnection { connection in
+      try await connection.withChannel { channel in
+        let queue = try await channel.queue("", exclusive: true)
+        try await queue.publish("pooled message")
+        let response = try await queue.get(acknowledgementMode: .automatic)
+        _ = try await queue.delete()
+        return response?.bodyString
+      }
+    }
+
+    #expect(result == "pooled message")
+  }
+
+  @Test("Pool reuses connections", .timeLimit(.minutes(1)))
+  func poolReusesConnections() async throws {
+    let pool = BunnyConnectionPool(configuration: TestConfig.connectionConfiguration(), size: 1)
+    defer { pool.shutdown() }
+
+    // First use
+    try await pool.withConnection { _ in }
+
+    // Second use reuses the same connection (pool size is 1)
+    let isConnected = try await pool.withConnection { connection in
+      await connection.connected
+    }
+    #expect(isConnected)
+  }
+
+  @Test("Pool handles concurrent requests", .timeLimit(.minutes(1)))
+  func poolConcurrentRequests() async throws {
+    let pool = BunnyConnectionPool(configuration: TestConfig.connectionConfiguration(), size: 4)
+    defer { pool.shutdown() }
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for i in 0..<8 {
+        group.addTask {
+          try await pool.withConnection { connection in
+            try await connection.withChannel { channel in
+              let queue = try await channel.queue("", exclusive: true)
+              try await queue.publish("concurrent \(i)")
+              _ = try await queue.get(acknowledgementMode: .automatic)
+              _ = try await queue.delete()
+            }
+          }
+        }
+      }
+      try await group.waitForAll()
+    }
+  }
+
+  @Test("Pool with URI constructor", .timeLimit(.minutes(1)))
+  func poolWithURI() async throws {
+    let pool = try BunnyConnectionPool(uri: TestConfig.rabbitmqURL, size: 2)
+    defer { pool.shutdown() }
+
+    let isConnected = try await pool.withConnection { connection in
+      await connection.connected
+    }
+    #expect(isConnected)
+  }
+}
