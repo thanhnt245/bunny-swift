@@ -5,7 +5,7 @@
 //
 // Copyright (c) 2025-2026 Michael S. Klishin
 //
-// Portions derived from PostgresNIO (MIT License)
+// Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
 import Atomics
@@ -55,10 +55,8 @@ public final class ConnectionPool<
     // MARK: - Properties
 
     private let factory: ConnectionFactory
-    private let configuration: ConnectionPoolConfiguration
     private let keepAliveBehavior: KeepAliveBehavior
     private let observabilityDelegate: ObservabilityDelegate
-    private let idGenerator: ConnectionIDGenerator
 
     private struct State: Sendable {
         var stateMachine: StateMachine
@@ -81,10 +79,8 @@ public final class ConnectionPool<
         factory: @escaping ConnectionFactory
     ) {
         self.factory = factory
-        self.configuration = configuration
         self.keepAliveBehavior = keepAliveBehavior
         self.observabilityDelegate = observabilityDelegate
-        self.idGenerator = idGenerator
 
         let smConfig = StateMachine.Configuration(
             minimumConnectionCount: configuration.minimumConnectionCount,
@@ -136,6 +132,7 @@ public final class ConnectionPool<
         }
     }
 
+    /// Not recommended outside of tests due to [connection churn](https://www.rabbitmq.com/docs/connections#high-connection-churn)
     public func withConnection<Result: Sendable>(
         _ closure: (Connection) async throws -> Result
     ) async throws -> Result {

@@ -68,6 +68,7 @@ let package = Package(
             name: "ConnectionPool",
             dependencies: [
                 .product(name: "Atomics", package: "swift-atomics"),
+                .product(name: "DequeModule", package: "swift-collections"),
             ]
         ),
 

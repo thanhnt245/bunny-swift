@@ -138,59 +138,6 @@ public enum ConfirmMethodID: UInt16, Sendable {
     case selectOk = 11
 }
 
-// MARK: - Reply Codes
-
-/// AMQP reply codes
-public enum ReplyCode: UInt16, Sendable {
-    // Success
-    case success = 200
-
-    // Soft errors (channel closed)
-    case contentTooLarge = 311
-    case noRoute = 312
-    case noConsumers = 313
-    case accessRefused = 403
-    case notFound = 404
-    case resourceLocked = 405
-    case preconditionFailed = 406
-
-    // Hard errors (connection closed)
-    case connectionForced = 320
-    case invalidPath = 402
-    case frameError = 501
-    case syntaxError = 502
-    case commandInvalid = 503
-    case channelError = 504
-    case unexpectedFrame = 505
-    case resourceError = 506
-    case notAllowed = 530
-    case notImplemented = 540
-    case internalError = 541
-
-    /// Whether this is a soft error (channel-level)
-    public var isSoftError: Bool {
-        switch self {
-        case .contentTooLarge, .noRoute, .noConsumers,
-             .accessRefused, .notFound, .resourceLocked, .preconditionFailed:
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// Whether this is a hard error (connection-level)
-    public var isHardError: Bool {
-        switch self {
-        case .connectionForced, .invalidPath, .frameError, .syntaxError,
-             .commandInvalid, .channelError, .unexpectedFrame, .resourceError,
-             .notAllowed, .notImplemented, .internalError:
-            return true
-        default:
-            return false
-        }
-    }
-}
-
 // MARK: - Field Value Type Tags
 
 /// AMQP table field value type tags

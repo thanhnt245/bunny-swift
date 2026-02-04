@@ -5,7 +5,7 @@
 //
 // Copyright (c) 2025-2026 Michael S. Klishin
 //
-// Portions derived from PostgresNIO (MIT License)
+// Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
 public struct ConnectionLease<Connection: PooledConnection>: Sendable {

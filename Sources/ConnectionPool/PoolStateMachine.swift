@@ -5,7 +5,7 @@
 //
 // Copyright (c) 2025-2026 Michael S. Klishin
 //
-// Portions derived from PostgresNIO (MIT License)
+// Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
 import Foundation
@@ -113,7 +113,7 @@ struct PoolStateMachine<
     private let idGenerator: ConnectionIDGenerator
     private var poolState: PoolState = .running
     private var connections: [ConnectionID: ConnectionState] = [:]
-    private var requestQueue: [Request] = []
+    private var requestQueue = RequestQueue<Request>()
     private var timerIDCounter = 0
     private var timerCancellations: [Int: TimerCancellationToken] = [:]
     private var pendingConnectionCount = 0
@@ -155,7 +155,7 @@ struct PoolStateMachine<
         }
 
         // No idle connection, queue the request
-        requestQueue.append(request)
+        requestQueue.enqueue(request)
 
         // Try to create a new connection if under limits
         let totalConnections = connections.count + pendingConnectionCount
@@ -189,8 +189,7 @@ struct PoolStateMachine<
 
     private mutating func handleConnectionBecameAvailable(_ connection: Connection) -> Action {
         // Service queued requests
-        if !requestQueue.isEmpty {
-            let request = requestQueue.removeFirst()
+        if let request = requestQueue.popFirst() {
             connections[connection.id] = .leased(connection)
             return Action(request: .leaseConnection(request, connection), connection: .none)
         }
@@ -263,8 +262,7 @@ struct PoolStateMachine<
             let elapsed = clock.now - context.timeOfFirstFailure
             if elapsed >= configuration.circuitBreakerTripAfter && connections.isEmpty {
                 poolState = .circuitBreakerOpen(context)
-                let failedRequests = TinyFastSequence(contentsOf: requestQueue)
-                requestQueue.removeAll()
+                let failedRequests = TinyFastSequence(contentsOf: requestQueue.removeAll())
                 return Action(
                     request: .failRequests(failedRequests, .circuitBreakerTripped),
                     connection: scheduleBackoffTimer(attempts: context.numberOfFailedAttempts).connection
@@ -317,7 +315,7 @@ struct PoolStateMachine<
         if timersToCancel.isEmpty {
             return .none()
         }
-        return Action(request: .none, connection: .cancelTimers(TinyFastSequence(Array(timersToCancel))))
+        return Action(request: .none, connection: .cancelTimers(TinyFastSequence(contentsOf: timersToCancel)))
     }
 
     // MARK: - Timer Handling
@@ -450,8 +448,7 @@ struct PoolStateMachine<
                 }
             }
 
-            let failedRequests = TinyFastSequence(contentsOf: requestQueue)
-            requestQueue.removeAll()
+            let failedRequests = TinyFastSequence(contentsOf: requestQueue.removeAll())
 
             if connections.isEmpty && pendingConnectionCount == 0 {
                 poolState = .shutDown
@@ -468,10 +465,9 @@ struct PoolStateMachine<
     }
 
     mutating func cancelRequest(_ requestID: RequestID) -> Action {
-        guard let index = requestQueue.firstIndex(where: { $0.id == requestID }) else {
+        guard let request = requestQueue.cancel(requestID) else {
             return .none()
         }
-        let request = requestQueue.remove(at: index)
         return Action(request: .failRequest(request, .requestCancelled), connection: .none)
     }
 

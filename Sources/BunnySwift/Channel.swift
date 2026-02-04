@@ -662,6 +662,16 @@ public actor Channel {
                 cont.resume(throwing: error)
             }
             pendingGetResponses.removeAll()
+            // Resume all pending publisher confirmations with error
+            for (_, cont) in confirmHandlers {
+                cont.resume(throwing: error)
+            }
+            confirmHandlers.removeAll()
+            // Resume all confirm limit waiters
+            for waiter in confirmLimitWaiters {
+                waiter.resume()
+            }
+            confirmLimitWaiters.removeAll()
             await connection?.channelClosed(channelID)
 
         case .basicDeliver(let deliver):
@@ -767,14 +777,13 @@ public actor Channel {
     private func handleConfirm(deliveryTag: UInt64, multiple: Bool, ack: Bool) {
         var confirmedCount = 0
         if multiple {
-            var toResume: [(UInt64, CheckedContinuation<Bool, Error>)] = []
-            for (tag, cont) in confirmHandlers where tag <= deliveryTag {
-                toResume.append((tag, cont))
-            }
-            for (tag, cont) in toResume {
-                confirmHandlers.removeValue(forKey: tag)
-                cont.resume(returning: ack)
-                confirmedCount += 1
+            // Collect only keys rather than (key, continuation) tuples
+            let keysToRemove = confirmHandlers.keys.filter { $0 <= deliveryTag }
+            for tag in keysToRemove {
+                if let cont = confirmHandlers.removeValue(forKey: tag) {
+                    cont.resume(returning: ack)
+                    confirmedCount += 1
+                }
             }
         } else if let cont = confirmHandlers.removeValue(forKey: deliveryTag) {
             cont.resume(returning: ack)
@@ -821,6 +830,18 @@ public actor Channel {
             continuation.finish()
         }
         consumers.removeAll()
+
+        // Cancel pending publisher confirmations
+        let closeError = ConnectionError.channelClosed(
+            replyCode: 200, replyText: "Channel closed by client", classID: 0, methodID: 0)
+        for (_, cont) in confirmHandlers {
+            cont.resume(throwing: closeError)
+        }
+        confirmHandlers.removeAll()
+        for waiter in confirmLimitWaiters {
+            waiter.resume()
+        }
+        confirmLimitWaiters.removeAll()
 
         let close = ChannelClose(replyCode: 200, replyText: "Normal shutdown", classId: 0, methodId: 0)
         try await sendMethod(.channelClose(close))

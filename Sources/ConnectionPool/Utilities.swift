@@ -5,7 +5,7 @@
 //
 // Copyright (c) 2025-2026 Michael S. Klishin
 //
-// Portions derived from PostgresNIO (MIT License)
+// Portions derived from PostgresNIO (licensed under the MIT License)
 // Copyright (c) 2017-2024 Vapor
 
 import Foundation
@@ -79,18 +79,33 @@ struct TinyFastSequence<Element: Sendable>: Sequence, Sendable {
     }
 
     func makeIterator() -> AnyIterator<Element> {
-        var index = 0
-        let elements: [Element]
         switch storage {
-        case .none: elements = []
-        case .one(let e): elements = [e]
-        case .two(let e1, let e2): elements = [e1, e2]
-        case .array(let arr): elements = arr
-        }
-        return AnyIterator {
-            guard index < elements.count else { return nil }
-            defer { index += 1 }
-            return elements[index]
+        case .none:
+            return AnyIterator { nil }
+        case .one(let e):
+            var done = false
+            return AnyIterator {
+                if done { return nil }
+                done = true
+                return e
+            }
+        case .two(let e1, let e2):
+            var index = 0
+            return AnyIterator {
+                defer { index += 1 }
+                switch index {
+                case 0: return e1
+                case 1: return e2
+                default: return nil
+                }
+            }
+        case .array(let arr):
+            var index = 0
+            return AnyIterator {
+                guard index < arr.count else { return nil }
+                defer { index += 1 }
+                return arr[index]
+            }
         }
     }
 }
@@ -136,17 +151,26 @@ struct Max2Sequence<Element: Sendable>: Sequence, Sendable {
     }
 
     func makeIterator() -> AnyIterator<Element> {
-        var index = 0
-        let elements: [Element]
         switch storage {
-        case .none: elements = []
-        case .one(let e): elements = [e]
-        case .two(let e1, let e2): elements = [e1, e2]
-        }
-        return AnyIterator {
-            guard index < elements.count else { return nil }
-            defer { index += 1 }
-            return elements[index]
+        case .none:
+            return AnyIterator { nil }
+        case .one(let e):
+            var done = false
+            return AnyIterator {
+                if done { return nil }
+                done = true
+                return e
+            }
+        case .two(let e1, let e2):
+            var index = 0
+            return AnyIterator {
+                defer { index += 1 }
+                switch index {
+                case 0: return e1
+                case 1: return e2
+                default: return nil
+                }
+            }
         }
     }
 }
