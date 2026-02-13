@@ -32,36 +32,29 @@ private final class IteratorBox<Element>: @unchecked Sendable {
   }
 }
 
-/// Encoder added after handshake to avoid type conflicts with raw ByteBuffer writes
-private struct PlainChannelInitializer: @unchecked Sendable {
+private struct PipelineInitializer: @unchecked Sendable {
   let frameMax: UInt32
-  let continuation: AsyncStream<Frame>.Continuation
-
-  func initialize(_ channel: NIO.Channel) -> EventLoopFuture<Void> {
-    channel.pipeline.addHandler(ByteToMessageHandler(AMQPFrameDecoder(maxFrameSize: frameMax)))
-      .flatMap {
-        channel.pipeline.addHandler(FrameForwardingHandler(continuation: self.continuation))
-      }
-  }
-}
-
-private struct TLSChannelInitializer: @unchecked Sendable {
-  let frameMax: UInt32
-  let sslContext: NIOSSLContext
+  let sslContext: NIOSSLContext?
   let hostname: String
   let continuation: AsyncStream<Frame>.Continuation
 
   func initialize(_ channel: NIO.Channel) -> EventLoopFuture<Void> {
-    do {
-      let sslHandler = try NIOSSLClientHandler(context: sslContext, serverHostname: hostname)
-      return channel.pipeline.addHandler(sslHandler).flatMap {
-        channel.pipeline.addHandler(
-          ByteToMessageHandler(AMQPFrameDecoder(maxFrameSize: self.frameMax)))
-      }.flatMap {
-        channel.pipeline.addHandler(FrameForwardingHandler(continuation: self.continuation))
+    var future = channel.eventLoop.makeSucceededVoidFuture()
+
+    if let sslContext = sslContext {
+      do {
+        let sslHandler = try NIOSSLClientHandler(context: sslContext, serverHostname: hostname)
+        future = channel.pipeline.addHandler(sslHandler)
+      } catch {
+        return channel.eventLoop.makeFailedFuture(error)
       }
-    } catch {
-      return channel.eventLoop.makeFailedFuture(error)
+    }
+
+    return future.flatMap {
+      channel.pipeline.addHandler(
+        ByteToMessageHandler(AMQPFrameDecoder(maxFrameSize: self.frameMax)))
+    }.flatMap {
+      channel.pipeline.addHandler(FrameForwardingHandler(continuation: self.continuation))
     }
   }
 }
@@ -134,95 +127,35 @@ public actor AMQPTransport {
     configuration: ConnectionConfiguration,
     continuation: AsyncStream<Frame>.Continuation
   ) async throws -> Channel {
-    let frameMax = configuration.frameMax
-    let host = configuration.host
-    let port = configuration.port
+    let sslContext: NIOSSLContext? =
+      if let tlsConfig = configuration.tls {
+        try NIOSSLContext(configuration: tlsConfig.toNIOSSLConfiguration())
+      } else {
+        nil
+      }
 
-    if let tlsConfig = configuration.tls {
-      return try await createTLSChannel(
-        host: host,
-        port: port,
-        frameMax: frameMax,
-        tlsConfig: tlsConfig,
-        timeout: configuration.connectionTimeout,
-        enableTCPNoDelay: configuration.enableTCPNoDelay,
-        enableTCPKeepAlive: configuration.enableTCPKeepAlive,
-        continuation: continuation
-      )
-    } else {
-      return try await createPlainChannel(
-        host: host,
-        port: port,
-        frameMax: frameMax,
-        timeout: configuration.connectionTimeout,
-        enableTCPNoDelay: configuration.enableTCPNoDelay,
-        enableTCPKeepAlive: configuration.enableTCPKeepAlive,
-        continuation: continuation
-      )
-    }
-  }
-
-  private func createPlainChannel(
-    host: String,
-    port: Int,
-    frameMax: UInt32,
-    timeout: TimeAmount,
-    enableTCPNoDelay: Bool,
-    enableTCPKeepAlive: Bool,
-    continuation: AsyncStream<Frame>.Continuation
-  ) async throws -> Channel {
-    let promise = eventLoopGroup.next().makePromise(of: Channel.self)
-    let initializer = PlainChannelInitializer(frameMax: frameMax, continuation: continuation)
-
-    var bootstrap = ClientBootstrap(group: eventLoopGroup)
-      .channelOption(.socketOption(.so_reuseaddr), value: 1)
-      .connectTimeout(timeout)
-      .channelInitializer(initializer.initialize)
-
-    if enableTCPKeepAlive {
-      bootstrap = bootstrap.channelOption(.socketOption(.so_keepalive), value: 1)
-    }
-    if enableTCPNoDelay {
-      bootstrap = bootstrap.channelOption(.socketOption(.tcp_nodelay), value: 1)
-    }
-
-    bootstrap.connect(host: host, port: port).cascade(to: promise)
-
-    return try await promise.futureResult.get()
-  }
-
-  private func createTLSChannel(
-    host: String,
-    port: Int,
-    frameMax: UInt32,
-    tlsConfig: TLSConfiguration,
-    timeout: TimeAmount,
-    enableTCPNoDelay: Bool,
-    enableTCPKeepAlive: Bool,
-    continuation: AsyncStream<Frame>.Continuation
-  ) async throws -> Channel {
-    let sslContext = try NIOSSLContext(configuration: tlsConfig.toNIOSSLConfiguration())
-    let promise = eventLoopGroup.next().makePromise(of: Channel.self)
-    let initializer = TLSChannelInitializer(
-      frameMax: frameMax,
+    let initializer = PipelineInitializer(
+      frameMax: configuration.frameMax,
       sslContext: sslContext,
-      hostname: host,
+      hostname: configuration.host,
       continuation: continuation
     )
 
+    let promise = eventLoopGroup.next().makePromise(of: Channel.self)
+
     var bootstrap = ClientBootstrap(group: eventLoopGroup)
       .channelOption(.socketOption(.so_reuseaddr), value: 1)
-      .connectTimeout(timeout)
+      .connectTimeout(configuration.connectionTimeout)
       .channelInitializer(initializer.initialize)
 
-    if enableTCPKeepAlive {
+    if configuration.enableTCPKeepAlive {
       bootstrap = bootstrap.channelOption(.socketOption(.so_keepalive), value: 1)
     }
-    if enableTCPNoDelay {
+    if configuration.enableTCPNoDelay {
       bootstrap = bootstrap.channelOption(.socketOption(.tcp_nodelay), value: 1)
     }
 
-    bootstrap.connect(host: host, port: port).cascade(to: promise)
+    bootstrap.connect(host: configuration.host, port: configuration.port).cascade(to: promise)
 
     return try await promise.futureResult.get()
   }
@@ -338,7 +271,10 @@ public actor AMQPTransport {
       throw ConnectionError.notConnected
     }
     let encoder = AMQPFrameEncoder(maxFrameSize: frameMax)
-    try await channel.pipeline.addHandler(encoder, position: .first).get()
+    // Must sit before the forwarding handler so outbound frames are
+    // encoded to ByteBuffer before reaching the TLS handler.
+    let anchor = try await channel.pipeline.handler(type: FrameForwardingHandler.self).get()
+    try await channel.pipeline.addHandler(encoder, position: .before(anchor)).get()
   }
 
   private func setupHeartbeat(interval: UInt16) async throws {
@@ -349,7 +285,10 @@ public actor AMQPTransport {
         await self?.handleHeartbeatTimeout()
       }
     }
-    try await channel.pipeline.addHandler(handler, name: "heartbeat").get()
+    // Must sit before the forwarding handler to see inbound frames.
+    let anchor = try await channel.pipeline.handler(type: FrameForwardingHandler.self).get()
+    try await channel.pipeline.addHandler(handler, name: "heartbeat", position: .before(anchor))
+      .get()
   }
 
   private func handleHeartbeatTimeout() {

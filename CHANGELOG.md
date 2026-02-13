@@ -7,7 +7,8 @@
 
 ### Bug Fixes
 
- * Heartbeat monitor setup was unintentionally skipped
+ * NIO pipeline handler ordering caused a crash on TLS connections when opening a channel
+ * Heartbeat monitor could not observe inbound frames (any traffic counts for a heartbeat)
 
 
 ## 0.9.0 (Dec 29, 2025)

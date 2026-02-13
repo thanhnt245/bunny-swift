@@ -39,6 +39,53 @@ struct TestConfig {
   static func openConnection() async throws -> Connection {
     return try await Connection.open(connectionConfiguration())
   }
+
+  // MARK: - TLS Configuration
+
+  /// Path to the directory containing `tls-gen`-generated certificates.
+  /// Set TLS_CERTS_DIR to override; falls back to the local tls-gen checkout.
+  static var tlsCertsDir: String? {
+    ProcessInfo.processInfo.environment["TLS_CERTS_DIR"]
+      ?? {
+        let fallback =
+          NSString(
+            string: "~/Development/Opensource/tls-gen.git/basic/result"
+          ).expandingTildeInPath
+        return FileManager.default.fileExists(atPath: fallback + "/ca_certificate.pem")
+          ? fallback : nil
+      }()
+  }
+
+  static var skipTLSTests: Bool {
+    tlsCertsDir == nil
+  }
+
+  /// Creates a TLS connection configuration using tls-gen certificates
+  static func tlsConnectionConfiguration() throws -> ConnectionConfiguration {
+    guard let certsDir = tlsCertsDir else {
+      throw ConnectionError.protocolError("TLS certificates not found")
+    }
+
+    let isCI = ProcessInfo.processInfo.environment["CI"] == "true"
+    let tls = try TLSConfiguration.fromPEMFiles(
+      certificatePath: "\(certsDir)/client_certificate.pem",
+      keyPath: "\(certsDir)/client_key.pem",
+      caCertificatePath: "\(certsDir)/ca_certificate.pem",
+      verifyPeer: false
+    )
+
+    return ConnectionConfiguration(
+      port: 5671,
+      tls: tls,
+      enableTCPNoDelay: !isCI,
+      enableTCPKeepAlive: !isCI
+    )
+  }
+
+  /// Opens a TLS connection using tls-gen certificates
+  static func openTLSConnection() async throws -> Connection {
+    return try await Connection.open(tlsConnectionConfiguration())
+  }
 }
 
 // MARK: - Placeholder Test
