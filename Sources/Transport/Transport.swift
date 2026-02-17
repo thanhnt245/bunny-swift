@@ -5,6 +5,5 @@
 //
 // Copyright (c) 2025-2026 Michael S. Klishin
 
-import NIO
-
 @_exported import AMQPProtocol
+import NIO
