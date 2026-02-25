@@ -1,6 +1,8 @@
 ## 0.11.0 (in development)
 
-(no changes yet)
+### Bug Fixes
+
+ * `TCP_NODELAY` socket option was set at `SOL_SOCKET` level instead of `IPPROTO_TCP`, causing connection failures on Linux
 
 
 ## 0.10.0 (Feb 17, 2026)
