@@ -152,7 +152,8 @@ public actor AMQPTransport {
       bootstrap = bootstrap.channelOption(.socketOption(.so_keepalive), value: 1)
     }
     if configuration.enableTCPNoDelay {
-      bootstrap = bootstrap.channelOption(.socketOption(.tcp_nodelay), value: 1)
+      // TCP_NODELAY is a TCP-level socket option (SOL_TCP/IPPROTO_TCP), not a SOL_SOCKET option.
+      bootstrap = bootstrap.channelOption(.tcpOption(.tcp_nodelay), value: 1)
     }
 
     bootstrap.connect(host: configuration.host, port: configuration.port).cascade(to: promise)
