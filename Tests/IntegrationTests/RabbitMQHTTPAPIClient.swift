@@ -10,6 +10,10 @@
 
 import Foundation
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 /// A lightweight RabbitMQ HTTP API client for use in tests.
 struct RabbitMQHTTPAPIClient {
   let endpoint: URL
