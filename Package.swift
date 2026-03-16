@@ -28,6 +28,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.87.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
+        .package(url: "https://github.com/michaelklishin/rabbitmq-http-api-client-swift.git", branch: "main"),
     ],
     targets: [
         // MARK: - Main Library
@@ -85,7 +86,10 @@ let package = Package(
         // MARK: - Integration Tests
         .testTarget(
             name: "IntegrationTests",
-            dependencies: ["BunnySwift"]
+            dependencies: [
+                "BunnySwift",
+                .product(name: "RabbitMQHTTPAPIClient", package: "rabbitmq-http-api-client-swift"),
+            ]
         ),
     ]
 )
