@@ -4,6 +4,7 @@ BunnySwift is a RabbitMQ client for Swift that primarily follows the API design 
 borrows from the .NET, Java, Python (Pika) and Rust (amqprs) clients. It is built on
 Swift NIO and modern Swift concurrency features such as async/await.
 
+If you are looking for a RabbitMQ HTTP API for Swift 6, see [`michaelklishin/rabbitmq-http-api-client-swift`](https://github.com/michaelklishin/rabbitmq-http-api-client-swift).
 
 ## Supported iOS and macOS Versions
 
