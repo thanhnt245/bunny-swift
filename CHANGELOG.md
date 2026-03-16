@@ -1,4 +1,4 @@
-## 0.12.0 (in development)
+## 0.12.0 (Mar 15, 2026)
 
 ### Bug Fixes
 
