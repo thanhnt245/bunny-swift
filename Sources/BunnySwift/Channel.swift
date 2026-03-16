@@ -491,7 +491,7 @@ public actor Channel {
     frameMax: UInt32
   ) -> [Frame] {
     let maxBodySize = Int(frameMax) - 8
-    let bodyFrameCount = body.isEmpty ? 1 : (body.count + maxBodySize - 1) / maxBodySize
+    let bodyFrameCount = body.isEmpty ? 0 : (body.count + maxBodySize - 1) / maxBodySize
     var frames: [Frame] = []
     frames.reserveCapacity(2 + bodyFrameCount)
 
@@ -512,16 +512,19 @@ public actor Channel {
         properties: properties
       ))
 
-    if body.count <= maxBodySize {
-      // Fast path: body fits in single frame, no copy needed
-      frames.append(.body(channelID: channelID, payload: body))
-    } else {
-      // Chunked: split into multiple frames
-      var offset = 0
-      while offset < body.count {
-        let end = min(offset + maxBodySize, body.count)
-        frames.append(.body(channelID: channelID, payload: body[offset..<end]))
-        offset = end
+    // AMQP 0-9-1: no body frames when bodySize is zero
+    if !body.isEmpty {
+      if body.count <= maxBodySize {
+        // Fast path: body fits in single frame, no copy needed
+        frames.append(.body(channelID: channelID, payload: body))
+      } else {
+        // Chunked: split into multiple frames
+        var offset = 0
+        while offset < body.count {
+          let end = min(offset + maxBodySize, body.count)
+          frames.append(.body(channelID: channelID, payload: body[offset..<end]))
+          offset = end
+        }
       }
     }
 
