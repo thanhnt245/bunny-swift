@@ -29,7 +29,7 @@ public actor Connection {
 
   private var onBlockedHandlers: [@Sendable (String) -> Void] = []
   private var onUnblockedHandlers: [@Sendable () -> Void] = []
-  private var onCloseHandlers: [@Sendable (ConnectionClose) -> Void] = []
+  private var onCloseHandlers: [@Sendable (ConnectionClose?) -> Void] = []
   private var onRecoveryHandlers: [@Sendable () async -> Void] = []
   private var onRecoveryFailureHandlers: [@Sendable (any Error) async -> Void] = []
   private var onQueueNameChangeHandlers:
@@ -252,10 +252,11 @@ public actor Connection {
     }
 
     guard configuration.automaticRecovery else {
-      // No recovery: terminate all consumer streams permanently
+      // No recovery: terminate all consumer streams permanently and call onCloseHandlers
       for channel in channels.values {
         await channel.terminateConsumers()
       }
+      for handler in onCloseHandlers { handler(nil) }
       return
     }
 
@@ -423,7 +424,7 @@ public actor Connection {
     onUnblockedHandlers.append(handler)
   }
 
-  public func onClose(_ handler: @escaping @Sendable (ConnectionClose) -> Void) {
+  public func onClose(_ handler: @escaping @Sendable (ConnectionClose?) -> Void) {
     onCloseHandlers.append(handler)
   }
 
